@@ -41,37 +41,53 @@ const agendaController = {
     },
 
    crearCita: async (req, res) => {
-    try {
-        const { fecha, hora, estilista_id, cliente_id, servicio_id, notas, anticipo } = req.body;
+        try {
+            const { fecha, hora, hora_fin, estilista_id, cliente_id, servicio_id, notas, anticipo } = req.body;
 
-        // 1. Validar disponibilidad
-      const [existe] = await db.query(
-    `SELECT id FROM agenda 
-     WHERE fecha = ? 
-     AND TIME_FORMAT(hora, '%H:%i') = TIME_FORMAT(?, '%H:%i') 
-     AND estilista_id = ? 
-     AND estado_id = 1 
-     AND estatus_cita NOT IN ('Cancelada', 'No vino')`, 
-    [fecha, hora, estilista_id]
-    );
+            // 1. Validar que la hora de fin sea después de la de inicio
+            if (hora_fin <= hora) {
+                return res.status(400).json({ 
+                    mensaje: 'La hora de fin no puede ser antes o igual a la hora de inicio.' 
+                });
+            }
 
-        if (existe.length > 0) {
-            return res.status(400).json({ 
-                mensaje: 'Ese estilista ya tiene cita agendada a esa hora, Elige otra fecha u horario.' 
-            });
+            // 2. EL CANDADO: Validar disponibilidad por RANGO
+            // Lógica: Hay choque si (NuevaInicio < ExistenteFin) Y (NuevaFin > ExistenteInicio)
+            const queryDisponibilidad = `
+                SELECT id FROM agenda 
+                WHERE fecha = ? 
+                AND estilista_id = ? 
+                AND estado_id = 1 
+                AND estatus_cita NOT IN ('Cancelada', 'No vino')
+                AND (TIME(?) < TIME(hora_fin) AND TIME(?) > TIME(hora))
+            `;
+            
+            const [existe] = await db.query(queryDisponibilidad, [
+                fecha, 
+                estilista_id, 
+                hora,     
+                hora_fin  
+            ]);
+
+            if (existe.length > 0) {
+                return res.status(400).json({ 
+                    mensaje: 'Error, El/la estilista todavía está ocupado/a en ese horario. Por favor, elige otro rango de horario.' 
+                });
+            }
+
+            // 3. Si está libre, procede al INSERT
+            const queryInsert = `
+                INSERT INTO agenda (fecha, hora, hora_fin, cliente_id, estilista_id, servicio_id, notas, anticipo, estatus_pago, estado_id, estatus_cita) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pendiente', 1, 'Agendada')
+            `;
+            
+            await db.query(queryInsert, [fecha, hora, hora_fin, cliente_id, estilista_id, servicio_id, notas, anticipo]);
+
+            res.json({ message: "Cita agendada con éxito." });
+        } catch (error) {
+            console.error("Error al crear cita:", error);
+            res.status(500).json({ error: error.message });
         }
-
-        // 2. Si está libre, procedemos al INSERT
-        const query = `INSERT INTO agenda (fecha, hora, cliente_id, estilista_id, servicio_id, notas, anticipo, estatus_pago, estado_id, estatus_cita) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 'Pendiente', 1, 'Agendada')`;
-        
-        await db.query(query, [fecha, hora, cliente_id, estilista_id, servicio_id, notas, anticipo]);
-
-        res.json({ message: "Cita agendada con éxito" });
-    } catch (error) {
-        console.error("Error al crear cita:", error);
-        res.status(500).json({ error: error.message });
-    }
     },
 
     actualizarCita: async (req, res) => {
